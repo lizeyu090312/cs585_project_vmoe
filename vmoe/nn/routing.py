@@ -57,6 +57,7 @@ class NoisyTopExpertsPerItemRouter(nn.Module):
     gates_softmax, metrics = self._compute_gates_softmax_and_metrics(
         inputs, self.num_experts)
     dispatcher = self._create_dispatcher(gates_softmax)
+    # print(f'dispatcher.shape in NoisyTopExpertsPerItemRouter.__call__: {dispatcher.shape}')
     return dispatcher, metrics
 
   @nn.nowrap

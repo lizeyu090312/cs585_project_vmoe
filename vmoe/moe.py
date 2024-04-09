@@ -148,15 +148,26 @@ class EinsumDispatcher(BaseDispatcher):
   def dispatch(self, data: Array) -> Array:
     dispatch_weights = (
         self.combine_weights > 0
-        if self.dispatch_weights is None else self.dispatch_weights)
+        if self.dispatch_weights is None else self.dispatch_weights)  # bool array
+    print(f"self.dispatch_weights.shape {self.dispatch_weights.shape} in EinsumDispatcher.dispatch()")
+    print(f"data.shape in EinsumDispatcher's dispatch {data.shape} before jnp.einsum")
     data = jnp.einsum("GSEC,GS...->GEC...", dispatch_weights, data,
                       precision=self.einsum_precision)
-    return _dispatch(data, self.partition_spec)
+    # print(dispatch_weights[0])  # should print bool array
+    # jnp.save(file="/home/zl310/cs585_project/vmoe/dispatch_weights.npy", arr=dispatch_weights)
+    # print(f"data.shape in EinsumDispatcher's dispatch {data.shape} after jnp.einsum")
+    this_ret = _dispatch(data, self.partition_spec)
+    # print(f"_dispatch(data, self.partition_spec).shape {this_ret.shape}")
+    return this_ret
 
-  def combine(self, data: Array) -> Array:
+  def combine(self, data: Array, snap_to_1_or_0=False) -> Array:
     """Combines data from experts according to combine_weights."""
     num_groups, _, _, _ = self.combine_weights.shape
     data = _receive(data, num_groups, self.partition_spec)
+    combine_weights_snapped = jnp.array(jnp.bool_(self.combine_weights), dtype=jnp.float32)
+    if snap_to_1_or_0:
+      return jnp.einsum("GSEC,GEC...->GS...", combine_weights_snapped, data,
+                        precision=self.einsum_precision)
     return jnp.einsum("GSEC,GEC...->GS...", self.combine_weights, data,
                       precision=self.einsum_precision)
 
@@ -220,10 +231,10 @@ class Bfloat16Dispatcher(BaseDispatcher):
     data = self.dispatcher.dispatch(data)
     return data.astype(dtype)
 
-  def combine(self, data: Array) -> Array:
+  def combine(self, data: Array, snap=False) -> Array:
     dtype = data.dtype
     data = _cast_to_bfloat16(data)
-    data = self.dispatcher.combine(data)
+    data = self.dispatcher.combine(data, snap)
     return data.astype(dtype)
 
 
@@ -249,7 +260,7 @@ def compute_capacity(
     # Make capacity multiple of 4 to try to avoid padding.
     capacity += (-capacity) % multiple_of
   actual_capacity_factor = capacity * num_experts / num_tokens
-  if abs(actual_capacity_factor - capacity_factor) > 1e-6:
+  if abs(actual_capacity_factor - capacity_factor) > 1e-2:
     logging.warning(
         "The target capacity_factor is %f, but with num_tokens=%d and "
         "num_experts=%d the actual capacity_factor is %f.",
@@ -302,6 +313,7 @@ def get_top_experts_per_item_dispatcher(
   Returns:
     A dispatcher.
   """
+  # print(f"get_top_experts_per_item_dispatcher in num_selected_experts {num_selected_experts}")
   if (capacity is None) == (capacity_factor is None):
     raise ValueError(
         "You must specify either 'capacity' or 'capacity_factor', and not both."
@@ -321,6 +333,7 @@ def get_top_experts_per_item_dispatcher(
       "einsum": _get_top_experts_per_item_einsum_dispatcher,
       "indices": _get_top_experts_per_item_expert_indices_dispatcher,
   }
+  # print(name)  # == einsum for cs585
   if name not in fn_map:
     raise ValueError(f"Unknown dispatcher type: {name!r}")
   return fn_map[name](gates, num_selected_experts, capacity, batch_priority,
@@ -427,8 +440,37 @@ def sparse_moe_spmd(target: flax.linen.transforms.Target,
   def wrapper(expert_fn: Callable[..., Any]):
 
     def transformed(scopes, dispatcher, *inputs):
+      assert inputs[0].shape == inputs[1].shape, f"transformed inputs[0].shape != inputs[1].shape"
+      indices = inputs[1]  # inputs should consist of (reshaped data, reshaped indices)
       # Prepare inputs to be processed by each expert.
+      inputs = (inputs[0],)  # inputs needs to be a tuple
+      print(f"indices.shape {indices.shape}, inputs[0].shape {inputs[0].shape} before dispatch in transformed")
+      orig_inputs = inputs[0].copy()
       inputs = jax.tree_util.tree_map(dispatcher.dispatch, inputs)
+      orig_indices = indices.copy()
+      indices_out = jax.tree_util.tree_map(dispatcher.dispatch, indices)
+      print(f"indices_out.shape {indices_out.shape}, inputs[0].shape {inputs[0].shape} after dispatch in transformed")
+      ind_new_x, ind_new_y, ind_orig_x, ind_orig_y = None, None, None, None
+      for rr in range(indices_out.shape[0]):
+        for cc in range(indices_out.shape[1]):
+          if indices_out[rr, cc, 0] != 0:
+            b_num = indices_out[rr, cc, 0]
+            p_num = indices_out[rr, cc, 1]
+            ind_new_x, ind_new_y = rr, cc
+            break
+        else: continue
+        break  # break out of nested for-loops
+      for rr in range(orig_indices.shape[0]):
+        for cc in range(orig_indices.shape[1]):
+          if orig_indices[rr, cc, 0] == b_num and orig_indices[rr, cc, 1] == p_num:
+            ind_orig_x, ind_orig_y = rr, cc
+            break
+        else: continue
+        break
+      print("from orig inputs", orig_inputs[ind_orig_x, ind_orig_y, 0:15])
+      print("from dispatched inputs", inputs[0][ind_new_x, ind_new_y, 0:15])
+      print("subtraction of the two", orig_inputs[ind_orig_x, ind_orig_y, 0:15] - inputs[0][ind_new_x, ind_new_y, 0:15])
+
       # Wrap the target with vmap, to pass different parameters and inputs to
       # each expert.
       outputs = flax.core.lift.vmap(
@@ -438,10 +480,13 @@ def sparse_moe_spmd(target: flax.linen.transforms.Target,
           variable_axes=variable_axes,
           split_rngs=split_rngs)(scopes, *inputs)
       # Combine outputs.
+      print(f"outputs.shape {outputs.shape} before jax.tree_util.tree_map(dispatcher.combine, outputs)")
       if has_aux:
         outputs, aux = outputs
       outputs = jax.tree_util.tree_map(dispatcher.combine, outputs)
-      return (outputs, aux) if has_aux else outputs
+      print(f"sparse_moe_spmd outputs.shape {outputs.shape}")
+      # return (outputs, aux) if has_aux else outputs
+      return (outputs, aux, indices_out) if has_aux else (outputs, indices_out)
 
     return transformed
 
@@ -487,6 +532,7 @@ def _convert_partition_spec(spec):
 
 def _dispatch(data: Array, partition_spec: Optional[PartitionSpec]) -> Array:
   """Dispatches data to experts using all_to_all."""
+  # print(f"input data to _dispatch data.shape {data.shape}")
   partition_spec = _convert_partition_spec(partition_spec)
   num_groups, num_experts, capacity, *item_shape = data.shape
   data = with_sharding_constraint(data, partition_spec)
@@ -497,7 +543,9 @@ def _dispatch(data: Array, partition_spec: Optional[PartitionSpec]) -> Array:
     data = jnp.swapaxes(data, 0, 1)
   data = data.reshape(-1, *item_shape)
   data = with_sharding_constraint(data, partition_spec)
-  return data.reshape(num_experts, num_groups * capacity, *item_shape)
+  out_this = data.reshape(num_experts, num_groups * capacity, *item_shape)
+  # print(f"output of _dispatch out_this.shape {out_this.shape}")
+  return out_this
 
 
 def _receive(data: Array, num_groups: int,
@@ -516,6 +564,7 @@ def _receive(data: Array, num_groups: int,
     data = data.reshape(num_experts, num_groups, capacity, *item_shape)
     data = jnp.swapaxes(data, 0, 1)
   data = with_sharding_constraint(data, partition_spec)
+  print(f"_receive data.shape {data.shape}")
   return data
 
 
@@ -608,11 +657,15 @@ def _get_top_experts_per_item_einsum_dispatcher(
   """
   _, _, buffer_idx = _get_top_experts_per_item_common(
       gates, num_selected_experts, batch_priority)
+  print("gates.shape", gates.shape)
   # (S, K, E) -> (S, E). Select the only buffer index for each (item, expert).
   buffer_idx = jnp.max(buffer_idx, axis=1)
+  print("buffer_idx.shape", buffer_idx.shape)
   # (S, E, C). Convert the buffer indices to a one-hot matrix. We rely on the
   # fact that indices < 0 or >= capacity will be ignored by the dispatcher.
   dispatch_weights = jax.nn.one_hot(buffer_idx, capacity, dtype=jnp.bool_)
+  print('dispatch_weights.shape', dispatch_weights.shape)
+  # jnp.save(file="/home/zl310/cs585_project/vmoe/dispatch_weights.npy", arr=dispatch_weights)
   einsum_precision = dispatcher_kwargs.get("einsum_precision",
                                            jax.lax.Precision.DEFAULT)
   combine_weights = jnp.einsum(

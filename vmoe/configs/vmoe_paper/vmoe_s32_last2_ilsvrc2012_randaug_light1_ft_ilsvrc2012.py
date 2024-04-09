@@ -38,7 +38,12 @@ TFDS_MANUAL_DIR = None
 TFDS_DATA_DIR = None
 # The following configuration was made to fit on TPUv3-32. The number of images
 # per device has to be at least 32.
-BATCH_SIZE = 1024    # Number of images processed in each step.
+
+
+# BATCH_SIZE = 1024    # Number of images processed in each step.
+
+
+BATCH_SIZE = 32    # Number of images processed in each step.
 NUM_CLASSES = 1_000  # Number of ILSVRC2012 classes.
 IMAGE_SIZE = 384     # Image size as input to the model.
 
@@ -50,10 +55,16 @@ def get_config():
   config.dataset = ml_collections.ConfigDict()
   pp_common = f'value_range(-1,1)|onehot({NUM_CLASSES}, inkey="label", outkey="labels")|keep("image", "labels")'
   # Dataset variation used for training.
+  """
   config.dataset.train = get_data_train_config(
       name='imagenet2012', split='train[:99%]',
       process=(
           f'decode_jpeg_and_inception_crop({IMAGE_SIZE})|flip_lr|{pp_common}'))
+  """
+  config.dataset.train = get_data_train_config(  # get same pre-processing as config.dataset.test
+      name='imagenet2012', split='train[:99%]',
+      process=(
+          f'decode|resize({IMAGE_SIZE})|{pp_common}'))
   # Dataset variation used for validation.
   config.dataset.val = get_data_eval_config(
       name='imagenet2012', split='train[99%:]',
