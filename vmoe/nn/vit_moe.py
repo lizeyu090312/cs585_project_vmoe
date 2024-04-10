@@ -105,12 +105,10 @@ class MlpMoeBlock(nn.Module):
     assert inputs.ndim == 3, f'Expected ndim = 3, but got shape {inputs.shape}'
     indices = np.zeros_like(inputs)
 
-    ccc = 0
     for batch_idx in range(indices.shape[0]):
       for patch_idx in range(indices.shape[1]):
         indices[batch_idx, patch_idx, 0] = batch_idx + 1
-        indices[batch_idx, patch_idx, 1] = patch_idx + 1
-        ccc += 1
+        indices[batch_idx, patch_idx, 1] = patch_idx  # the 0th patch is added with jnp.concat, so ignore that
     # Reshape inputs from (num_seqs, seq_length, hidden_size) to
     # (num_groups, groups_size, hidden_size).
     inputs_shape = inputs.shape
@@ -251,10 +249,10 @@ class EncoderMoe(nn.Module):
   @nn.compact
   def __call__(self, inputs):
     assert inputs.ndim == 3, f'Expected ndim = 3, but got shape {inputs.shape}'
-    print('in EncoderMoe, inputs.shape', inputs.shape)
+    # print('in EncoderMoe, inputs.shape', inputs.shape)
     x = self.add_position_emb(inputs)
     x = nn.Dropout(rate=self.dropout_rate, deterministic=self.deterministic)(x)
-    print('in EncoderMoe, x.shape', x.shape)
+    # print('in EncoderMoe, x.shape', x.shape)
     dense_mlp_params = dict(mlp_dim=self.mlp_dim,
                             dropout_rate=self.dropout_rate)
     moe_mlp_params = {**dense_mlp_params, **(self.moe or {})}
@@ -276,7 +274,7 @@ class EncoderMoe(nn.Module):
     metrics = {}
     indices_out_dict = dict()
     for block in range(self.num_layers):
-      print(f'block in EncoderMoe {block}, x.shape = {x.shape}')
+      # print(f'block in EncoderMoe {block}, x.shape = {x.shape}')
       if block in moe_mlp_layers:
         x, metrics[f'encoderblock_{block}'], indices_out_dict[f'idx_{block}'] = encoder_block_cls(
             name=f'encoderblock_{block}', mlp_block=moe_mlp_cls)(x)
@@ -284,7 +282,7 @@ class EncoderMoe(nn.Module):
         x = encoder_block_cls(
             name=f'encoderblock_{block}', mlp_block=dense_mlp_cls)(x)
     encoded = nn.LayerNorm(name='encoder_norm')(x)
-    print(f'encoded.shape {encoded.shape}')
+    # print(f'encoded.shape {encoded.shape}')
     # Sum auxiliary losses from all blocks.
     metrics['auxiliary_loss'] = sum(
         m['auxiliary_loss'] for m in metrics.values())
@@ -346,7 +344,7 @@ class VisionTransformerMoe(nn.Module):
   encoder: KwArgs
   classifier: str = 'token'
   representation_size: Optional[int] = None
-  deterministic: bool = True  # was false
+  deterministic: bool = False
   head_bias_init: float = 0.0
   head_kernel_zero_init: bool = True
   encoder_cls: Type[nn.Module] = EncoderMoe
@@ -364,8 +362,9 @@ class VisionTransformerMoe(nn.Module):
     x = nn.Conv(
         features=self.hidden_size, kernel_size=self.patch_size,
         strides=self.patch_size, padding='VALID', name='embedding')(inputs)
+    # print(x.shape, x[0, :, :, 0])
     # x is the representation of tiles (i.e., patches)
-    print(f"self.hidden_size {self.hidden_size}, self.patch_size {self.patch_size}, self.patch_size {self.patch_size}")
+    # print(f"self.hidden_size {self.hidden_size}, self.patch_size {self.patch_size}, self.patch_size {self.patch_size}")
     # sincos2d positional embedding needs the grid size, but the Encoder expects
     # a flatten sequence, so we must feed that info as part of the kwargs.
     encoder_kwargs = dict(self.encoder)
@@ -375,20 +374,23 @@ class VisionTransformerMoe(nn.Module):
       encoder_kwargs['position_emb']['w'] = x.shape[2]
     # Reshape images into sequences of tokens.
     x = x.reshape(x.shape[0], -1, x.shape[-1])
-    print("VisionTransformerMoe.__call__, x.shape", x.shape)
+    # print(x.shape, x[0, :, 0])
+    # print("VisionTransformerMoe.__call__, x.shape", x.shape)
     # If we want to add a class token, add it here.
-    print(f"x.shape {x.shape} before jnp.concatenate([cls, x], axis=1)")
+    # print(f"x.shape {x.shape} before jnp.concatenate([cls, x], axis=1)")
     if self.classifier == 'token':
       cls = self.param('cls', nn.initializers.zeros, (1, 1, x.shape[-1]))
-      print(f"self.param('cls', nn.initializers.zeros, (1, 1, x.shape[-1])), cls.shape {cls.shape}")
+      # print(f"self.param('cls', nn.initializers.zeros, (1, 1, x.shape[-1])), cls.shape {cls.shape}")
       cls = jnp.tile(cls, [x.shape[0], 1, 1])
-      print(f"jnp.tile(cls, [x.shape[0], 1, 1]) has shape {cls.shape}")
+      # print(cls)
+      # print(f"jnp.tile(cls, [x.shape[0], 1, 1]) has shape {cls.shape}")
       x = jnp.concatenate([cls, x], axis=1)
+      # print(x)
     # Encode tokens unsing the MoE encoder.
-    print(f"x.shape {x.shape} immediately before self.encoder_cls")
+    # print(f"x.shape {x.shape} immediately before self.encoder_cls")
     x, metrics, indices_distr = self.encoder_cls(
         name='Encoder', deterministic=self.deterministic, **encoder_kwargs)(x)
-    print(f'x.shape {x.shape} after self.encoder_cls()')
+    # print(f'x.shape {x.shape} after self.encoder_cls()')
     # Get a single vector representation of the full sequence.
     if self.classifier == 'token' or self.classifier == '0':
       x = x[:, 0]
@@ -401,7 +403,7 @@ class VisionTransformerMoe(nn.Module):
           name='MapHead')(x)
     else:
       raise ValueError(f'Unknown classifier: {self.classifier!r}')
-    print(f'self.classifier = {self.classifier}, x.shape={x.shape}')
+    # print(f'self.classifier = {self.classifier}, x.shape={x.shape}')
     if self.representation_size is not None:
       x = nn.Dense(features=self.representation_size, name='pre_logits')(x)
       x = nn.tanh(x)
@@ -414,7 +416,7 @@ class VisionTransformerMoe(nn.Module):
           name='head',
           kernel_init=self.kernel_init,
           bias_init=nn.initializers.constant(self.head_bias_init))(x)
-      print(f'logits.shape {logits.shape} at return')
+      # print(f'logits.shape {logits.shape} at return')
       return logits, metrics, indices_distr
     else:
       return x, metrics, indices_distr
