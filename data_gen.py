@@ -1,4 +1,5 @@
 import os
+import re
 import uuid 
 import tqdm
 import logging
@@ -46,9 +47,9 @@ def process_indices(indices_distr: dict[str: jnp.ndarray], batch_idx: int, mask,
                 if layer[expert, buf, 0] != 0 and layer[expert, buf, 1] != 0:
                     b_idx, p_idx = int(layer[expert, buf, 0]), int(layer[expert, buf, 1])
                     if img[b_idx-1, p_idx-1, 0] == 0:
-                        img[b_idx-1, p_idx-1, 0] = expert  # img[batch_idx, patch_idx] = expert_id, 1-indexing
+                        img[b_idx-1, p_idx-1, 0] = expert + 1  # img[batch_idx, patch_idx] = expert_id, 1-indexing
                     else:
-                        img[b_idx-1, p_idx-1, 1] = expert
+                        img[b_idx-1, p_idx-1, 1] = expert + 1  # those that aren't assigned experts are left with expertID=0
     img5_reshaped = img5.reshape(batch_sz, img_sz, img_sz, topk)
     img7_reshaped = img7.reshape(batch_sz, img_sz, img_sz, topk)
     if jnp.sum(mask) != batch_sz:
@@ -65,6 +66,23 @@ def process_indices(indices_distr: dict[str: jnp.ndarray], batch_idx: int, mask,
     return
 
 
+def which_batches_are_done(dir_abs_path) -> set:
+    def extract_last_integer(filename):
+        match = re.search(pattern, filename)
+        if match:
+            return int(match.group(1))
+        else:
+            return None
+    pattern = r'_batch_(\d+)_layer_both\.npy$'
+    files = os.listdir(dir_abs_path)
+    ret = set()
+    for file in files:
+        ret.add(extract_last_integer(file))
+    ret.add(None)
+    ret.remove(None)
+    return ret
+
+
 def gen_data(model, dataset, checkpoint, save_dir, start_b, end_b):
     ncorrect = 0
     ntotal = 0
@@ -76,17 +94,17 @@ def gen_data(model, dataset, checkpoint, save_dir, start_b, end_b):
     for batch in tqdm.tqdm(dataset):
         # The final batch has been padded with fake examples so that the batch size is
         # the same as all other batches. The mask tells us which examples are fake.
+        done_batches = which_batches_are_done(save_dir)
+        if i > end_b:
+            break
         if i < start_b: 
             i += 1
             continue
-        if i > end_b:
-            break
+        if i in done_batches:
+            i += 1
+            logging.info(f'skipping batch_idx {i} since it exists already')
+            continue
         mask = batch['__valid__']
-        # if jnp.sum(mask) != BATCH_SIZE:  # if there are some padded fake data inside of the current batch
-        #     break
-        # print(mask.shape)  # array of shape batch_size with boolean
-        # plt.imshow(batch['image'][0])
-        # print(jnp.argmax(batch['labels'], axis=1)[0])
         logits, _, indices_distr = model.apply({'params': checkpoint}, batch['image'])
     
         log_p = jax.nn.log_softmax(logits)
@@ -101,6 +119,7 @@ def gen_data(model, dataset, checkpoint, save_dir, start_b, end_b):
           logging.info(f'Test accuracy, iteration {i}: {ncorrect / ntotal * 100:.2f}%')
         i += 1
     print(f'Test accuracy: {ncorrect / ntotal * 100:.2f}%')
+    return
 
 
 if __name__ == "__main__":
