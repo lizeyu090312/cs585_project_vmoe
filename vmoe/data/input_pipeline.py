@@ -134,7 +134,7 @@ def get_dataset(
   data = data.map(
       map_func=process_fn,
       num_parallel_calls=num_parallel_calls,
-      deterministic=False)
+      deterministic=True)  # changed here from False to True
   # if variant != 'train':
   #   num_fake_examples = builder.get_num_fake_examples(batch_size_per_process)
   #   if num_fake_examples > 0:
