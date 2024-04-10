@@ -1,5 +1,3 @@
-data/
-saved_model/
 vmoe_s32_last2_ilsvrc2012_randaug_light1_ft_ilsvrc2012.index
 vmoe_s32_last2_ilsvrc2012_randaug_light1_ft_ilsvrc2012.data-00000-of-00001
 *.npy
