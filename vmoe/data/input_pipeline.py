@@ -96,7 +96,8 @@ def get_dataset(
   builder = vmoe.data.builder.get_dataset_builder(
       name=name,
       split=split,
-      shuffle_files=variant == 'train',
+      # shuffle_files=variant == 'train',
+      shuffle_files=False,  # changed here
       shuffle_seed=shuffle_seed,
       **extra_builder_kwargs)
   # Compute the batch size per process.
@@ -110,32 +111,49 @@ def get_dataset(
   # Optionally, cache loaded data.
   if cache == 'loaded':
     data = data.cache()
-  if variant == 'train':
-    # Repeat training data forever.
-    data = data.repeat()
-    # Shuffle training data.
-    data = data.shuffle(shuffle_buffer, seed=shuffle_seed)
-    # Process
-    process_fn = get_data_process_fn(process)
-  else:
-    # Other variants process each example only once and include VALID_KEY to
-    # differentiate real vs. fake examples (that are added later).
-    def _mask_fn(data):
-      return data | {VALID_KEY: data.get(VALID_KEY, True)}
-    process_fn = _compose_fns(get_data_process_fn(process), _mask_fn)
+  # if variant == 'train':
+  #   # Repeat training data forever.
+  #   data = data.repeat()
+  #   # Shuffle training data.
+  #   data = data.shuffle(shuffle_buffer, seed=shuffle_seed)
+  #   # Process
+  #   process_fn = get_data_process_fn(process)
+  # else:
+  #   # Other variants process each example only once and include VALID_KEY to
+  #   # differentiate real vs. fake examples (that are added later).
+  #   def _mask_fn(data):
+  #     return data | {VALID_KEY: data.get(VALID_KEY, True)}
+  #   process_fn = _compose_fns(get_data_process_fn(process), _mask_fn)
+
+  # changed here
+  def _mask_fn(data):
+    return data | {VALID_KEY: data.get(VALID_KEY, True)}
+  process_fn = _compose_fns(get_data_process_fn(process), _mask_fn)
+
   # Process data.
   data = data.map(
       map_func=process_fn,
       num_parallel_calls=num_parallel_calls,
       deterministic=False)
-  if variant != 'train':
-    num_fake_examples = builder.get_num_fake_examples(batch_size_per_process)
-    if num_fake_examples > 0:
-      fake_elem = tf.nest.map_structure(
-          lambda spec: tf.zeros(spec.shape, spec.dtype), data.element_spec)
-      fake_data = tf.data.Dataset.from_tensors(fake_elem)
-      fake_data = fake_data.repeat(num_fake_examples).cache()
-      data = data.concatenate(fake_data)
+  # if variant != 'train':
+  #   num_fake_examples = builder.get_num_fake_examples(batch_size_per_process)
+  #   if num_fake_examples > 0:
+  #     fake_elem = tf.nest.map_structure(
+  #         lambda spec: tf.zeros(spec.shape, spec.dtype), data.element_spec)
+  #     fake_data = tf.data.Dataset.from_tensors(fake_elem)
+  #     fake_data = fake_data.repeat(num_fake_examples).cache()
+  #     data = data.concatenate(fake_data)
+
+  # changed here
+  num_fake_examples = builder.get_num_fake_examples(batch_size_per_process)
+  if num_fake_examples > 0:
+    fake_elem = tf.nest.map_structure(
+        lambda spec: tf.zeros(spec.shape, spec.dtype), data.element_spec)
+    fake_data = tf.data.Dataset.from_tensors(fake_elem)
+    fake_data = fake_data.repeat(num_fake_examples).cache()
+    data = data.concatenate(fake_data)
+
+
   # Batch data.
   data = data.batch(batch_size_per_process, drop_remainder=True)
   # Optionally, cache data after batching.
