@@ -1,3 +1,11 @@
+import os
+import uuid 
+import tqdm
+import logging
+import argparse
+os.environ['JAX_PLATFORMS'] = 'cpu'
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
+
 import jax
 from jax import numpy as jnp
 
@@ -10,17 +18,8 @@ from vmoe.checkpoints import partitioned
 from vmoe.configs.vmoe_paper.vmoe_s32_last2_ilsvrc2012_randaug_light1_ft_ilsvrc2012 import get_config, IMAGE_SIZE, BATCH_SIZE
 
 import numpy as np
-import matplotlib.pyplot as plt
 
-import os
-import uuid 
-import tqdm
-import logging
-import argparse
-
-# change configuration in the above file.
-os.environ['CUDA_VISIBLE_DEVICES'] = ''
-_ = """
+"""
 Adapted from vmoe/notebooks/demo_eee_CIFAR100.ipynb by Michael Li
 Structure:
 vmoe
@@ -36,8 +35,9 @@ def process_indices(indices_distr: dict[str: jnp.ndarray], batch_idx: int, mask,
                     class_lbl, fdir, batch_sz=BATCH_SIZE, img_sz: int = int(np.sqrt(144))):
     # img_sz * img_sz == number of tiles/patches in each 384*384 image. There are 144 tiles per image.
     class_lbl = np.array(class_lbl, dtype=np.uint16) * mask  # 2^16 = 65,536 > 1000
-    img5 = np.zeros(shape=(batch_sz, int(img_sz * img_sz)), dtype=np.uint8)
-    img7 = np.zeros(shape=(batch_sz, int(img_sz * img_sz)), dtype=np.uint8)
+    topk = 2
+    img5 = np.zeros(shape=(batch_sz, int(img_sz * img_sz), topk), dtype=np.uint8)
+    img7 = np.zeros(shape=(batch_sz, int(img_sz * img_sz), topk), dtype=np.uint8)
 
     exp, n, _ = indices_distr['idx_5'].shape
     for img, layer in zip([img5, img7], [indices_distr['idx_5'], indices_distr['idx_7']]):
@@ -45,9 +45,12 @@ def process_indices(indices_distr: dict[str: jnp.ndarray], batch_idx: int, mask,
             for buf in range(n):
                 if layer[expert, buf, 0] != 0 and layer[expert, buf, 1] != 0:
                     b_idx, p_idx = int(layer[expert, buf, 0]), int(layer[expert, buf, 1])
-                    img[b_idx-1, p_idx-1] = expert  # img[batch_idx, patch_idx] = expert_id, 1-indexing
-    img5_reshaped = img5.reshape(batch_sz, img_sz, img_sz)
-    img7_reshaped = img7.reshape(batch_sz, img_sz, img_sz)
+                    if img[b_idx-1, p_idx-1, 0] == 0:
+                        img[b_idx-1, p_idx-1, 0] = expert  # img[batch_idx, patch_idx] = expert_id, 1-indexing
+                    else:
+                        img[b_idx-1, p_idx-1, 1] = expert
+    img5_reshaped = img5.reshape(batch_sz, img_sz, img_sz, topk)
+    img7_reshaped = img7.reshape(batch_sz, img_sz, img_sz, topk)
     if jnp.sum(mask) != batch_sz:
         img5_reshaped = img5_reshaped[mask]
         img7_reshaped = img7_reshaped[mask]
@@ -62,15 +65,22 @@ def process_indices(indices_distr: dict[str: jnp.ndarray], batch_idx: int, mask,
     return
 
 
-def gen_data(model, dataset, checkpoint, save_dir):
+def gen_data(model, dataset, checkpoint, save_dir, start_b, end_b):
     ncorrect = 0
     ntotal = 0
     i = 0
     logging.info('-' * 10)
     logging.info('-' * 10)
+    if end_b == -1:
+        end_b = 10000000
     for batch in tqdm.tqdm(dataset):
         # The final batch has been padded with fake examples so that the batch size is
         # the same as all other batches. The mask tells us which examples are fake.
+        if i < start_b: 
+            i += 1
+            continue
+        if i > end_b:
+            break
         mask = batch['__valid__']
         # if jnp.sum(mask) != BATCH_SIZE:  # if there are some padded fake data inside of the current batch
         #     break
@@ -97,6 +107,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-t', '--train_or_test', type=str, required=True)
     parser.add_argument('-s', '--save_dir', type=str, required=True)
+    parser.add_argument('-b', '--start_b', type=int)
+    parser.add_argument('-e', '--end_b', type=int)  # inclusive of both ends
     args = parser.parse_args()
 
     logging.basicConfig(filename=f'vmoe_datagen_{args.train_or_test}.log', 
@@ -134,6 +146,6 @@ if __name__ == "__main__":
     elif args.train_or_test == "test":
         dataset = dataset_test
 
-    logging.info(f"start of generation file for save_dir = {args.save_dir}, BATCH_SIZE = {BATCH_SIZE}, data = {args.train_or_test}")
-    gen_data(model, dataset, checkpoint, save_dir=args.save_dir)
+    logging.info(f"start of generation file for save_dir = {args.save_dir}, BATCH_SIZE = {BATCH_SIZE}, data = {args.train_or_test}, from {args.start_b} to {args.end_b}")
+    gen_data(model, dataset, checkpoint, save_dir=args.save_dir, start_b=args.start_b, end_b=args.end_b)
              #save_dir='/home/zl310/cs585_project/vmoe/expert_assign_test_ImageNetData')
