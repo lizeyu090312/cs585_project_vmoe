@@ -5,6 +5,7 @@ import torch.optim as optim
 import time
 import os
 import logging
+import argparse
 
 from dataset_utils import get_data_loader
 
@@ -105,14 +106,11 @@ class ResNet(nn.Module):
         out = self.conv8_0(out)
         out = self.conv8_2(out)
         out = self.conv8_4(out)
-        print(out.shape)
         
         out = self.glbal_avg_pool(out)
-        print(out.shape)
-        # out = torch.flatten(out, start_dim=1)
-        # print(out.shape)
+
         out = out.view(out.size(0), -1)  # flatten before FC
-        print(out.shape)
+        
         out = self.fc(out)
         return out
 
@@ -124,9 +122,10 @@ def train(net, epochs, batch_size, lr, reg, num_classes, device, log_every_n=50)
     :param epochs: Number of epochs in total.
     :param batch_size: Batch size for training.
     """
-    print('==> Preparing data..')
     
-
+    logging.basicConfig(filename=f'resnet_train_n_classes_{num_classes}.log', level=logging.INFO, 
+                        format='%(levelname)s: %(asctime)s %(message)s')
+    logging.info('==> Preparing data..')
     trainloader, testloader = get_data_loader('train', batch_size, num_classes, shuffle=True)
     criterion = nn.CrossEntropyLoss()
 
@@ -142,7 +141,7 @@ def train(net, epochs, batch_size, lr, reg, num_classes, device, log_every_n=50)
         """
         Start the training code.
         """
-        print('\nEpoch: %d' % epoch)
+        logging.info('Epoch: %d' % epoch)
         net.train()
         train_loss = 0
         correct = 0
@@ -164,7 +163,7 @@ def train(net, epochs, batch_size, lr, reg, num_classes, device, log_every_n=50)
             if global_steps % log_every_n == 0:
                 end = time.time()
                 num_examples_per_second = log_every_n * batch_size / (end - start)
-                print("[Step=%d]\tLoss=%.4f\tacc=%.4f\t%.1f examples/second"
+                logging.info("[Step=%d]\tLoss=%.4f\tacc=%.4f\t%.1f examples/second"
                       % (global_steps, train_loss / (batch_idx + 1), (correct / total), num_examples_per_second))
                 start = time.time()
 
@@ -189,10 +188,21 @@ def train(net, epochs, batch_size, lr, reg, num_classes, device, log_every_n=50)
                 correct += predicted.eq(targets).sum().item()
         num_val_steps = len(testloader)
         val_acc = correct / total
-        print("Test Loss=%.4f, Test acc=%.4f" % (test_loss / (num_val_steps), val_acc))
+        logging.info("Test Loss=%.4f, Test acc=%.4f" % (test_loss / (num_val_steps), val_acc))
 
         if val_acc > best_acc:
             best_acc = val_acc
-            print("Saving...")
-            torch.save(net.state_dict(), f"resnet_{num_classes}.pt")
+            logging.info("Saving...")
+            torch.save(net.state_dict(), f"checkpoints/resnet_{num_classes}.pt")
     return
+
+
+if __name__ == "__main__":
+    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-n', '--num_classes', type=int, required=True)
+    args = parser.parse_args()
+    out_chan_dict = {2: 8, 4: 10, 8: 12, 16: 14, 32: 16, 64: 18}
+    num_classes = args.num_classes
+    net = ResNet(num_classes, out_chan=out_chan_dict[num_classes]).to(device)
+    train(net, epochs=100, batch_size=512, lr=0.01, reg=1e-4, num_classes=num_classes, device=device, log_every_n=50)

@@ -19,28 +19,38 @@ class ExpertID_Dataset(Dataset):
             target: numpy array of shape (num_data_points,)
         """
         assert len(x5.shape) == 4, f"wrong data shape: {x5.shape}"
-        if x5.shape[1] != 1:
-            x5 = np.transpose(x5, (0, 3, 1, 2))
-        if x7.shape[1] != 1:
-            x7 = np.transpose(x7, (0, 3, 1, 2))
+
+        sorted_target = np.sort(target)
+        target_map = dict()
+        i = 0
+        for c in sorted_target:
+            if c not in target_map.keys():
+                target_map[c] = i
+                i += 1
+
         data = np.zeros((x5.shape[0], 24, 24, 1))
-        data[:, 0:12, 0:12, :] = x5[:, :, :, 0]
-        data[:, 0:12, 12:, :] = x5[:, :, :, 1]
-        data[:, 12:, 0:12, :] = x7[:, :, :, 0]
-        data[:, 12:, 12:, :] = x7[:, :, :, 1]
+        data[:, 0:12, 0:12, 0] = x5[:, :, :, 0]
+        data[:, 0:12, 12:, 0] = x5[:, :, :, 1]
+        data[:, 12:, 0:12, 0] = x7[:, :, :, 0]
+        data[:, 12:, 12:, 0] = x7[:, :, :, 1]
+        # print(data.shape)
+        data = np.transpose(data, (0, 3, 1, 2))
         # Convert the data to torch.FloatTensor as it is the most common dtype for images
         self.data_array = torch.tensor(data, dtype=torch.float32)
-        self.target = torch.tensor(target)
+        
+        for i, _ in enumerate(target):  # transform target such that the class labels start from 0 to n_classes-1 inclusive
+            target[i] = target_map[target[i]]
+        self.target = torch.tensor(np.array(target, dtype=np.float32), dtype=torch.int64)
         if mode == "train":
             self.transform =  transforms.Compose([
-                transforms.ToTensor(),  ## data augmentation for training only
+                # transforms.ToTensor(),  ## data augmentation for training only
                 transforms.RandomCrop(size=(24, 24), padding=4, pad_if_needed=False, padding_mode='edge'),
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.Normalize(*data_stat)
                 ])
         elif mode == "test":
             self.transform =  transforms.Compose([
-                transforms.ToTensor(),  ## data augmentation below for training only
+                # transforms.ToTensor(),  ## data augmentation below for training only
                 transforms.Normalize(*data_stat)
                 ])
         else:
@@ -48,7 +58,7 @@ class ExpertID_Dataset(Dataset):
 
     def __len__(self):
         """Return the total number of data points in the dataset."""
-        return self.data_array[0]
+        return self.data_array.shape[0]
 
     def __getitem__(self, idx):
         image = self.transform(self.data_array[idx])
@@ -82,7 +92,7 @@ num_class_to_stats = {4: ((4.469289374325782,), (2.267659056475096,)),
 
 def get_data_loader(mode, batch_size, num_classes, shuffle=True):
     class_idx_dir="/home/zl310/cs585_project/vmoe/chosen_class_idx/"
-    which_classes = os.path.join(class_idx_dir, f"n_{num_classes}.npy")
+    which_classes = set(np.load(os.path.join(class_idx_dir, f"n_{num_classes}.npy")))
     data_dir = f"/home/zl310/cs585_project/vmoe/{mode}_data_selected_classes/"
     this_dest_dir = os.path.join(data_dir, f"data_n_{len(which_classes)}")
     x5 = np.load(os.path.join(this_dest_dir, f"x5_n_{len(which_classes)}.npy"))
