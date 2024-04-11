@@ -1,3 +1,11 @@
+"""
+Generate data for unencrypted channel. 
+The output should be stored in ./expert_assign_train_ImageNetData or 
+./expert_assign_test_ImageNetData. Each ImageNet batch creates three files:
+x_layer5, x_layer7 (both of shape (batch_sz, 12, 12, 2)), and y (of shape
+batch_sz). x_layer{i} stores the allocation of each patch to each expert
+y[b] contains the class label of each x_layer5[b, :, :, :] in the batch. 
+"""
 import os
 import re
 import uuid 
