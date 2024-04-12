@@ -93,7 +93,7 @@ num_class_to_stats = {4: ((4.469289374325782,), (2.267659056475096,)),
 def get_data_loader(mode, batch_size, num_classes, shuffle=True):
     class_idx_dir="/home/zl310/cs585_project/vmoe/chosen_class_idx/"
     which_classes = set(np.load(os.path.join(class_idx_dir, f"n_{num_classes}.npy")))
-    data_dir = f"/home/zl310/cs585_project/vmoe/{mode}_data_selected_classes/"
+    data_dir = f"/home/zl310/cs585_project/vmoe/{mode}_data_selected_classes/"  # unencrypted side-channel
     this_dest_dir = os.path.join(data_dir, f"data_n_{len(which_classes)}")
     x5 = np.load(os.path.join(this_dest_dir, f"x5_n_{len(which_classes)}.npy"))
     x7 = np.load(os.path.join(this_dest_dir, f"x7_n_{len(which_classes)}.npy"))
@@ -104,4 +104,4 @@ def get_data_loader(mode, batch_size, num_classes, shuffle=True):
         return DataLoader(train_set, batch_size=batch_size, shuffle=shuffle, num_workers=4), \
                 DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=4)
     elif mode == "test":
-        return DataLoader(train_set, batch_size=batch_size, shuffle=shuffle, num_workers=4)
+        return DataLoader(data_set, batch_size=batch_size, shuffle=shuffle, num_workers=4)
