@@ -8,11 +8,11 @@ if __name__ == "__main__":
     parser.add_argument('-n', '--n_proc', type=int, required=True)
     args = parser.parse_args()
     futures = []
-    maj_perc_list = [0.25, 0.375, 0.5, 0.625, 0.75, 0.875][::-1]
+    maj_perc_list = [0.25, 0.375, 0.5, 0.625, 0.75, 0.875]
     n_class_list = [2, 4, 8, 16, 32, 64][::-1]
     args_tuple_list = []
-    for perc in maj_perc_list:
-        for n_c in n_class_list:
+    for n_c in n_class_list:
+        for perc in maj_perc_list:
             args_tuple_list.append((perc, n_c))
     DATA_GEN_ENCRYPTED_PATH = "/home/zl310/cs585_project/vmoe/data_gen_encrypted.py"
     with concurrent.futures.ProcessPoolExecutor(max_workers=args.n_proc) as executor:
