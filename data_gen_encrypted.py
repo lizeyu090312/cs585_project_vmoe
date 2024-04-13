@@ -9,6 +9,7 @@ y stores the majority class within each batch.
 """
 from tqdm import tqdm
 import os
+import logging
 
 os.environ['JAX_PLATFORMS'] = 'cpu'
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
@@ -68,11 +69,97 @@ class AggregateTensor:
             return img_out, label_out, new_agg_obj
         return None, None, None
     
+    def update_force(self):
+        """
+        returns img and label with correct proportions, does not guarantee that ret.shape[0] >= 32
+        """
+        other_num_using_maj_num = int(self.maj_num_so_far * (1-self.maj_perc) / self.maj_perc)
+        maj_num_using_other_num = int(self.other_num_so_far * self.maj_perc / (1-self.maj_perc))
+        if self.maj_num_so_far > maj_num_using_other_num:
+            shuffle_idx = np.random.permutation(range(self.other_num_so_far + maj_num_using_other_num))
+            other_img = self.other_img[0:self.other_num_so_far]
+            other_label = self.other_label[0:self.other_num_so_far]
 
-def get_dataset(test_or_train, aggregate_batch_size, maj_perc,
+            maj_img = self.maj_img[0:maj_num_using_other_num]
+            maj_label = self.maj_label[0:maj_num_using_other_num]
+            print(len(other_label))
+            print(len(maj_label))
+            return np.concatenate((maj_img, other_img), axis=0)[shuffle_idx], \
+                np.concatenate((maj_label, other_label), axis=0)[shuffle_idx], None
+        else:
+            shuffle_idx = np.random.permutation(range(other_num_using_maj_num + self.maj_num_so_far))
+            other_img = self.other_img[0:other_num_using_maj_num]
+            other_label = self.other_label[0:other_num_using_maj_num]
+            print(len(other_label))
+            maj_img = self.maj_img[0:self.maj_num_so_far]
+            maj_label = self.maj_label[0:self.maj_num_so_far]
+            print(len(maj_label))
+            return np.concatenate((maj_img, other_img), axis=0)[shuffle_idx], \
+                np.concatenate((maj_label, other_label), axis=0)[shuffle_idx], None
+
+
+def highest_power_of_2(n):
+    res = 0
+    for i in range(n, 0, -1):
+        # if i is a power of 2
+        if (i & (i - 1)) == 0:
+            res = i
+            break
+    return res
+
+
+def process_indices(indices_distr, save_dir, num_classes, maj_class):
+    # indices_distr has shape (8, 55808, 512) for batch_size = 1024
+    expert_load_list = [[], []]  # first list for layer5, second list for layer7
+    num_experts = 8
+    for idx, layer in enumerate([indices_distr['idx_5'], indices_distr['idx_7']]):
+        for exp in range(num_experts):
+            expert_load_list[idx].append(np.sum(np.array(layer[exp]).flatten() != 0))
+
+
+    return
+
+
+def poll_aggr_obj(aggr_objs: dict[int, AggregateTensor], 
+                  class_to_max_possible: dict[int, int], 
+                  class_to_so_far: dict[int, int], new_img, new_label):
+    # class_to_so_far is the number of inputs that have been processed for this majority
+    # class so far (each class can be a majority class)
+    # returns True when needs to break
+    img_dict, label_dict = dict(), dict()
+    done = 0
+    for maj_cls, aggr_obj in aggr_objs.items():
+        img_out, label_out, new_agg_obj = aggr_obj.update(new_img, new_label)
+        if class_to_so_far[maj_cls] >= class_to_max_possible[maj_cls]:
+            done += 1
+        if img_out is not None:
+            img_dict[maj_cls] = img_out
+            label_dict[maj_cls] = label_out
+            aggr_objs[maj_cls] = new_agg_obj
+            class_to_so_far[maj_cls] += np.sum(label_out == maj_cls)
+    if done == len(class_to_max_possible.keys()):
+        return None, None, True
+    return img_dict, label_dict, False
+
+
+def eval_and_log(model, checkpoint, img_d, lbl_d, i, ncorrect, ntotal, maj_perc,
+                 save_dir, num_classes):
+    for maj_cls in img_d.keys():
+        img, lbl = img_d[maj_cls], lbl_d[maj_cls]
+        logits, _, indices_distr = model.apply({'params': checkpoint}, img)
+        preds = jnp.argmax(jax.nn.log_softmax(logits), axis=1)
+        ncorrect += jnp.sum(preds == lbl)
+        ntotal += len(lbl)
+        assert int(maj_perc * len(lbl)) == np.sum(maj_cls == lbl)
+        # logging.info(f'Test accuracy, iteration {i}: {ncorrect / ntotal * 100:.2f}%')
+        print(f'Test accuracy, iteration {i}: {ncorrect / ntotal * 100:.2f}%')
+        process_indices(indices_distr, save_dir, num_classes, maj_cls)
+    return ncorrect, ntotal
+
+
+def get_dataset(test_or_train, aggregate_batch_size, maj_perc, n_classes,
                 class_idx_dir="/home/zl310/cs585_project/vmoe/chosen_class_idx_encrypted", 
-                save_dir="/home/zl310/cs585_project/vmoe/ImageNetData_64classes_enc", count=True):
-    n_classes = 64  # only generate the data for 64 classes, n_classes can be sampled easily
+                save_dir="/home/zl310/cs585_project/vmoe/ImageNetData_64classes_enc", count=False):
     class_set = set(np.load(os.path.join(class_idx_dir, f"n_{n_classes}.npy")))
 
     model_config = get_config()
@@ -90,8 +177,9 @@ def get_dataset(test_or_train, aggregate_batch_size, maj_perc,
             variant='test',
             name=dataset_config_test.name, 
             split=dataset_config_test.split, 
-            batch_size=2048,#dataset_config_test.batch_size,
-            # batch_size shouldn't matter here, since we're simply collecting the 64 classes for more efficient future processing
+            batch_size=128,#dataset_config_test.batch_size,
+            # batch_size shouldn't matter too much here, since we're simply collecting 
+            # the 64 classes for more efficient future processing
             process=dataset_config_test.process, 
         )
     elif test_or_train == "train":
@@ -100,55 +188,72 @@ def get_dataset(test_or_train, aggregate_batch_size, maj_perc,
             variant='train',
             name=dataset_config_train.name, 
             split=dataset_config_train.split, 
-            batch_size=2048,#dataset_config_train.batch_size, 
+            batch_size=256,#dataset_config_train.batch_size, 
             process=dataset_config_train.process
         )
+    else:
+        raise Exception(f"check test_or_train, test_or_train = {test_or_train}")
     
-    maj_class_f = open(os.path.join(class_idx_dir, f"maj_class.txt"), 'r')
-    lines = maj_class_f.readlines()
-    maj_class = int(lines[0])
-    num_samples_of_maj_class = int(lines[1])
-    maj_class_f.close()
+    class_to_max_possible, class_to_freq, maj_class_to_aggr_obj, class_to_so_far = dict(), dict(), dict(), dict()
+    with open(os.path.join(class_idx_dir, f"class_count.txt"), 'r') as f_ptr:
+        lines = f_ptr.readlines()
+        for line in lines:  
+            # creates class to max possible # dict (ensures every batch has aggregate_batch_size*maj_perc 
+            # samples of majority class), freq dict of each class, and aggregate object where each class is
+            # majority class, and number of inputs processed for this class so far class_to_so_far
+            parts = line.strip().split(':')
+            cls, freq = int(parts[0]), int(parts[1])
+            if cls in class_set:  # only creating the dicts for the classes considered (based on n_classes)
+                class_list = list(class_set)
+                class_list.remove(cls)
+                if test_or_train == "train":
+                    class_to_freq[cls] = freq
+                    class_to_max_possible[cls] = int(freq - (freq % (aggregate_batch_size * maj_perc)))
+                else:
+                    freq = 50
+                    class_to_freq[cls] = freq
+                    class_to_max_possible[cls] = int(freq - (freq % (aggregate_batch_size * maj_perc)))
+                class_to_so_far[cls] = 0
+                maj_class_to_aggr_obj[cls] = AggregateTensor(aggregate_batch_size, class_list, maj_class=cls, maj_perc=maj_perc)
 
-    count_maj_class = 0
-    class_set.remove(maj_class)
-    class_list = list(class_set)
+    which_classes64 = np.load(os.path.join(class_idx_dir, "n_64.npy"))
+    count_maj_class = {c: 0 for c in which_classes64}
     
-    total_maj_so_far = 0
-    max_possible_maj = int(num_samples_of_maj_class - (num_samples_of_maj_class % (aggregate_batch_size * maj_perc)))
-    print(max_possible_maj)
-    aggr_obj = AggregateTensor(aggregate_batch_size, class_list, maj_class, maj_perc=maj_perc)
+    # max_possible_maj = int(num_samples_of_maj_class - (num_samples_of_maj_class % (aggregate_batch_size * maj_perc)))
+    # aggr_obj = AggregateTensor(aggregate_batch_size, class_list, maj_class, maj_perc=maj_perc)
 
     ncorrect, ntotal, i = 0, 0, 0
-    for batch in dataset:
+    for batch in tqdm(dataset):
         mask = batch['__valid__']
         orig_img = batch['image']
         if jnp.sum(mask) != orig_img.shape[0]:
             continue
         orig_true_lbl = np.array(jnp.argmax(batch['labels'], axis=1))
-        img, true_lbl, temp_aggr_obj = aggr_obj.update(orig_img, orig_true_lbl)
-
+        img_d, lbl_d, break_cond = poll_aggr_obj(maj_class_to_aggr_obj, class_to_max_possible, 
+                                                 class_to_so_far, orig_img, orig_true_lbl)
         if count:
-            count_maj_class += np.sum(true_lbl == maj_class)
-            print(count_maj_class)
-        elif img is not None:
-            maj_now = np.sum(true_lbl == maj_class)
-            print(f"number of classes from maj class {maj_now}")
-            total_maj_so_far += maj_now
-            if total_maj_so_far >= max_possible_maj:
-                print(f"reached max_possible_maj, max_possible_maj = {max_possible_maj}, total_maj_so_far = {total_maj_so_far}")
-                break
-            logits, _, indices_distr = model.apply({'params': checkpoint}, img)
-            log_p = jax.nn.log_softmax(logits)
-            preds = jnp.argmax(log_p, axis=1)
-            aggr_obj = temp_aggr_obj
-            ncorrect += jnp.sum(preds == true_lbl)
-            ntotal += len(true_lbl)
+            for c in which_classes64:
+                count_maj_class[c] += np.sum(orig_true_lbl == c)
+        elif break_cond == True:
+            break
+        elif len(img_d.keys()) > 0:
+            ncorrect, ntotal = eval_and_log(model, checkpoint, img_d, lbl_d, i, ncorrect, ntotal, maj_perc, 
+                                            save_dir, n_classes)
+            
             print(f'Test accuracy, iteration {i}: {ncorrect / ntotal * 100:.2f}%')
             i += 1
-    if count == True:
-        with open(os.path.join(class_idx_dir, f"maj_class.txt"), 'a') as f_ptr:
-            f_ptr.write(f"{count_maj_class}\n")
+    img, true_lbl, _ = aggr_obj.update_force()
+    if len(true_lbl) >= 32 and count == False:
+        truncated_len = highest_power_of_2(len(true_lbl))
+        logits, _, indices_distr = model.apply({'params': checkpoint}, img[0:truncated_len])
+        # process_indices()
+        preds = jnp.argmax(jax.nn.log_softmax(logits), axis=1)
+        ncorrect += jnp.sum(preds == true_lbl[0:truncated_len])
+        ntotal += len(true_lbl)
+    elif count == True:
+        with open(os.path.join(class_idx_dir, f"class_count.txt"), 'a') as f_ptr:
+            for c, freq in count_maj_class.items():
+                f_ptr.write(f"{c}:{freq}\n")
     return
 
-get_dataset(test_or_train="train", aggregate_batch_size=32, count=False, maj_perc=0.25)
+get_dataset(test_or_train="train", aggregate_batch_size=32, count=True, maj_perc=0.25, n_classes=4)
