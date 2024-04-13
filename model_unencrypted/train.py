@@ -97,8 +97,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', '--num_classes', type=int, required=True)
     args = parser.parse_args()
-    out_chan_dict = {2: 8, 4: 10, 8: 12, 16: 14, 32: 16, 64: 18}
+    out_chan_dict = {2: 8, 4: 10, 8: 12, 16: 14, 32: 16, 64: 18, 128: 22, 256: 24, 512: 26, 1000: 28}
     num_classes = args.num_classes
-    assert num_classes in [2, 4, 8, 16, 32, 64]
+    assert num_classes in out_chan_dict.keys()
     net = ResNet(num_classes, out_chan=out_chan_dict[num_classes]).to(device)
     train(net, epochs=200, batch_size=512, lr=0.01, reg=1e-4, num_classes=num_classes, device=device, log_every_n=50)
