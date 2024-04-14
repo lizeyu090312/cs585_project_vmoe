@@ -10,7 +10,7 @@ import argparse
 from dataset_utils import get_data_loader
 from model_class import ResNet
 
-def train(net, epochs, batch_size, lr, reg, num_classes, device, log_every_n=50):
+def train(net, epochs, batch_size, lr, reg, num_classes, device, log_every_n=500):
     """
     Training a network
     :param net: Network for training
@@ -92,13 +92,13 @@ def train(net, epochs, batch_size, lr, reg, num_classes, device, log_every_n=50)
     return
 
 
+out_chan_dict = {2: 8, 4: 10, 8: 12, 16: 14, 32: 16, 64: 18, 128: 22, 256: 24, 512: 26, 1000: 28}
 if __name__ == "__main__":
     device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', '--num_classes', type=int, required=True)
     args = parser.parse_args()
-    out_chan_dict = {2: 8, 4: 10, 8: 12, 16: 14, 32: 16, 64: 18, 128: 22, 256: 24, 512: 26, 1000: 28}
     num_classes = args.num_classes
     assert num_classes in out_chan_dict.keys()
     net = ResNet(num_classes, out_chan=out_chan_dict[num_classes]).to(device)
-    train(net, epochs=200, batch_size=512, lr=0.01, reg=1e-4, num_classes=num_classes, device=device, log_every_n=50)
+    train(net, epochs=200, batch_size=512, lr=0.01, reg=1e-4, num_classes=num_classes, device=device)
