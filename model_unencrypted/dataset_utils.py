@@ -12,7 +12,7 @@ import os
 class ExpertID_Dataset(Dataset):
     """Custom Dataset for loading NumPy array data"""
 
-    def __init__(self, x5: np.ndarray, x7: np.ndarray, target: np.ndarray, mode, data_stat):
+    def __init__(self, x5: np.ndarray, x7: np.ndarray, target: np.ndarray, mode, data_stat, test_normalise=True):
         """
         Args:
             data_array (numpy array): A numpy array of shape (num_data_points, 1, 12, 12).
@@ -49,10 +49,16 @@ class ExpertID_Dataset(Dataset):
                 transforms.Normalize(*data_stat)
                 ])
         elif mode == "test":
-            self.transform =  transforms.Compose([
-                # transforms.ToTensor(),  ## data augmentation below for training only
-                transforms.Normalize(*data_stat)
-                ])
+            if test_normalise == False:
+                self.transform =  transforms.Compose([
+                    # transforms.ToTensor(),  ## data augmentation below for training only
+                    # transforms.Normalize(*data_stat)
+                    ])
+            else:
+                self.transform =  transforms.Compose([
+                    # transforms.ToTensor(),  ## data augmentation below for training only
+                    transforms.Normalize(*data_stat)
+                    ])
         else:
             raise Exception("wrong mode, choose from 'train' and 'test'")
 
@@ -103,7 +109,7 @@ num_class_to_stats = {4: ((4.469289374325782,), (2.267659056475096,)),
                       1000: ((4.495041399588444,), (2.303071876769264,))}
 
 
-def get_data_loader(mode, batch_size, num_classes, shuffle=True):
+def get_data_loader(mode, batch_size, num_classes, shuffle=True, test_normalise=False):
     class_idx_dir="/home/zl310/cs585_project/vmoe/chosen_class_idx/"
     which_classes = set(np.load(os.path.join(class_idx_dir, f"n_{num_classes}.npy")))
     data_dir = f"/home/zl310/cs585_project/vmoe/{mode}_data_selected_classes/"  # unencrypted side-channel
@@ -111,7 +117,7 @@ def get_data_loader(mode, batch_size, num_classes, shuffle=True):
     x5 = np.load(os.path.join(this_dest_dir, f"x5_n_{len(which_classes)}.npy"))
     x7 = np.load(os.path.join(this_dest_dir, f"x7_n_{len(which_classes)}.npy"))
     target = np.load(os.path.join(this_dest_dir, f"y_n_{len(which_classes)}.npy"))
-    data_set = ExpertID_Dataset(x5, x7, target, mode=mode, data_stat=num_class_to_stats[num_classes])
+    data_set = ExpertID_Dataset(x5, x7, target, mode=mode, data_stat=num_class_to_stats[num_classes], test_normalise=test_normalise)
     if mode == "train":
         train_set, val_set = data_utils.random_split(data_set, [0.9, 0.1])
         return DataLoader(train_set, batch_size=batch_size, shuffle=shuffle, num_workers=4), \
