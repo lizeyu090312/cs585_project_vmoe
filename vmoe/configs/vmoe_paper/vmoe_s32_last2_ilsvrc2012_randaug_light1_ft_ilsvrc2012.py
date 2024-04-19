@@ -43,7 +43,7 @@ TFDS_DATA_DIR = None
 # BATCH_SIZE = 1024    # Number of images processed in each step.
 
 
-BATCH_SIZE = 32    # Number of images processed in each step.
+BATCH_SIZE = 256    # Number of images processed in each step.
 NUM_CLASSES = 1_000  # Number of ILSVRC2012 classes.
 IMAGE_SIZE = 384     # Image size as input to the model.
 
