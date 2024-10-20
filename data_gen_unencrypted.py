@@ -33,7 +33,6 @@ Adapted from vmoe/notebooks/demo_eee_CIFAR100.ipynb by Michael Li
 Structure:
 vmoe
     vmoe/
-    this notebook
     vit_jax/ (from vision_transformer)
     vmoe_s32_last2_ilsvrc2012_randaug_light1_ft_ilsvrc2012.data-00000-of-00001
     vmoe_s32_last2_ilsvrc2012_randaug_light1_ft_ilsvrc2012.index
